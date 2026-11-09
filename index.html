@@ -1,0 +1,141 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Audio Guestbook</title>
+  <style>
+    body { font-family: Georgia, serif; background: #faf6f1; color: #3b2f2f; margin: 0; padding: 24px; text-align: center; }
+    h1 { font-size: 26px; margin: 16px 0 6px; }
+    p { margin: 6px 0 18px; color: #6b5b5b; }
+    input { font-size: 16px; padding: 10px; width: 80%; max-width: 320px; border: 1px solid #d8cfc4; border-radius: 8px; margin-bottom: 20px; }
+    button { font-size: 18px; border: none; border-radius: 40px; padding: 16px 32px; margin: 8px; cursor: pointer; }
+    #rec { background: #c0392b; color: #fff; }
+    #stop { background: #3b2f2f; color: #fff; display: none; }
+    #send { background: #2e7d32; color: #fff; display: none; }
+    #again { background: #e0d8cc; color: #3b2f2f; display: none; }
+    #timer { font-size: 38px; margin: 16px 0; }
+    audio { width: 90%; max-width: 360px; margin: 12px 0; display: none; }
+    #status { min-height: 24px; font-size: 16px; }
+  </style>
+</head>
+<body>
+  <h1>Leave us a message 🎙️</h1>
+  <p>Record up to 3 minutes. Tell us anything: wishes, memories, advice.</p>
+ 
+  <input id="name" type="text" placeholder="Your name (optional)">
+  <div id="timer">3:00</div>
+ 
+  <button id="rec">● Start recording</button>
+  <button id="stop">■ Stop</button>
+  <audio id="player" controls></audio>
+  <div>
+    <button id="send">Send message</button>
+    <button id="again">Record again</button>
+  </div>
+  <div id="status"></div>
+ 
+  <script>
+    // PASTE YOUR APPS SCRIPT WEB APP URL BETWEEN THE QUOTES (it ends with /exec)
+    const APP_URL = 'https://script.google.com/macros/s/AKfycbzawJ4Ud_iWAXoHQtI-WH8heVawlzsrckdp54uolcFh9j9oSJILdcqUcNAyX-zYTVve/exec';
+ 
+    const MAX_SECONDS = 180;
+    let recorder, chunks = [], stream, tick, left = MAX_SECONDS, blob, mime = '';
+ 
+    const $ = id => document.getElementById(id);
+    const fmt = s => Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0');
+ 
+    function pickMime() {
+      const options = ['audio/mp4', 'audio/webm;codecs=opus', 'audio/webm', 'audio/ogg'];
+      for (const o of options) {
+        if (window.MediaRecorder && MediaRecorder.isTypeSupported(o)) return o;
+      }
+      return '';
+    }
+ 
+    $('rec').onclick = async () => {
+      if (!navigator.mediaDevices || !window.MediaRecorder) {
+        $('status').textContent = 'Recording is not supported in this browser. Please open this page in Chrome or Safari.';
+        return;
+      }
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      } catch (e) {
+        $('status').textContent = 'Please allow microphone access and try again.';
+        return;
+      }
+      mime = pickMime();
+      recorder = mime ? new MediaRecorder(stream, { mimeType: mime }) : new MediaRecorder(stream);
+      mime = recorder.mimeType || mime || 'audio/webm';
+      chunks = [];
+      recorder.ondataavailable = e => { if (e.data.size) chunks.push(e.data); };
+      recorder.onstop = () => {
+        stream.getTracks().forEach(t => t.stop());
+        blob = new Blob(chunks, { type: mime });
+        $('player').src = URL.createObjectURL(blob);
+        $('player').style.display = 'inline-block';
+        $('send').style.display = 'inline-block';
+        $('again').style.display = 'inline-block';
+        $('status').textContent = 'Listen back, then send it!';
+      };
+      recorder.start();
+      left = MAX_SECONDS;
+      $('timer').textContent = fmt(left);
+      $('rec').style.display = 'none';
+      $('stop').style.display = 'inline-block';
+      $('status').textContent = 'Recording…';
+      tick = setInterval(() => {
+        left--;
+        $('timer').textContent = fmt(left);
+        if (left <= 0) stopRec();
+      }, 1000);
+    };
+ 
+    function stopRec() {
+      clearInterval(tick);
+      if (recorder && recorder.state !== 'inactive') recorder.stop();
+      $('stop').style.display = 'none';
+    }
+    $('stop').onclick = stopRec;
+ 
+    $('again').onclick = () => {
+      $('player').style.display = 'none';
+      $('send').style.display = 'none';
+      $('again').style.display = 'none';
+      $('rec').style.display = 'inline-block';
+      $('timer').textContent = fmt(MAX_SECONDS);
+      $('status').textContent = '';
+    };
+ 
+    $('send').onclick = () => {
+      $('send').disabled = true;
+      $('again').style.display = 'none';
+      $('status').textContent = 'Sending… please wait.';
+      const reader = new FileReader();
+      reader.onloadend = async () => {
+        const base64 = reader.result.split(',')[1];
+        try {
+          const res = await fetch(APP_URL, {
+            method: 'POST',
+            body: JSON.stringify({ audio: base64, mimeType: mime, guestName: $('name').value })
+          });
+          const out = await res.json();
+          if (!out.ok) throw new Error(out.error || 'save failed');
+          $('status').textContent = 'Thank you! Your message was saved ❤️';
+          $('player').style.display = 'none';
+          $('send').style.display = 'none';
+          $('send').disabled = false;
+          $('rec').style.display = 'inline-block';
+          $('rec').textContent = '● Record another';
+          $('timer').textContent = fmt(MAX_SECONDS);
+        } catch (err) {
+          $('status').textContent = 'Something went wrong. Please try again.';
+          $('send').disabled = false;
+          $('again').style.display = 'inline-block';
+        }
+      };
+      reader.readAsDataURL(blob);
+    };
+  </script>
+</body>
+</html>
